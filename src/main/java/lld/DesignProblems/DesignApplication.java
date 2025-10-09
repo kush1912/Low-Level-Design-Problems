@@ -22,7 +22,7 @@ public class DesignApplication {
 	1. Make Util class
 		- Id generator
 	2. Enums, Models, Services, constants
-	2. In the driver code always start from the smallest Difficulty class
+	2. In the driver code always start from the smallest level class
 	3. Add logs after Each Action
 	4. Focus on Problem Action by Action and keep checking after each action.
 	5. Make Shared Resources Static
