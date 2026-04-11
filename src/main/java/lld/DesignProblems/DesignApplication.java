@@ -7,9 +7,6 @@ package lld.DesignProblems;
 //@SpringBootApplication
 public class DesignApplication {
 
-
-
-
 	public static void main(String[] args) {
 
 

@@ -17,6 +17,11 @@ public class IssueService {
     private IssueRepository issueRepository;
     private AgentRepository agentRepository;
 
+    public IssueService(IssueRepository issueRepository, AgentRepository agentRepository) {
+        this.issueRepository = issueRepository;
+        this.agentRepository = agentRepository;
+    }
+
     public Issue createIssue(String transactionId, IssueType issueType, String subject, String description, String email){
         String id = "U" + UUID.randomUUID().toString().substring(0,6);
         Issue issue =  new Issue(id,transactionId, issueType, subject, description, email);
