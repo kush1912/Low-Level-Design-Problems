@@ -1,0 +1,96 @@
+================================================================================
+   RATE LIMITER - INTERVIEW FOLLOW-UP QUESTIONS & PRACTICE
+================================================================================
+
+
+================================================================================
+SECTION 1: CONCEPT & DESIGN QUESTIONS
+================================================================================
+
+Q1.  What's the difference between Token Bucket and Sliding Window rate limiter?
+     When would you use which?
+
+Q2.  How would you implement per-user rate limiting?
+     (e.g., each user gets 10 req/sec)
+
+Q3.  What if we need a distributed rate limiter?
+     (multiple servers sharing limits — Redis-based approach)
+
+Q4.  Why lazy refill vs a background thread refilling tokens? Trade-offs?
+
+Q5.  What happens if tryConsume is called with tokens > maxTokens?
+     Should we handle it?
+
+
+================================================================================
+SECTION 2: MULTITHREADING DEEP-DIVE QUESTIONS
+================================================================================
+
+Q6.  Why ReentrantLock and not synchronized? What's the advantage here?
+
+Q7.  Can we make this lock-free using AtomicInteger + CAS? How?
+
+Q8.  What if we want a blocking version?
+     (thread waits until token is available instead of returning false)
+
+Q9.  Is currentTokens volatile enough without the lock? Why not?
+
+Q10. What happens if 1000 threads call tryConsume simultaneously?
+     Any performance concerns?
+
+
+================================================================================
+SECTION 3: EXTENSION / CODING TASKS
+================================================================================
+
+E1.  Add a tryConsume with timeout — wait up to N ms for a token.
+
+E2.  Add metrics — track allowed/rejected counts, current token count.
+
+E3.  Support burst + sustained rate — e.g., allow 20 burst but 5/sec sustained.
+
+E4.  Make it configurable at runtime — change rate without restart.
+
+E5.  How would you unit test this? How do you test time-dependent code?
+
+
+================================================================================
+SECTION 4: IMPLEMENTATION PLAN (Files to create in this folder)
+================================================================================
+
+DONE:
+  [x] TokenBucketRateLimiter.java        — Basic Token Bucket (ReentrantLock)
+
+TODO:
+  [ ] SlidingWindowRateLimiter.java       — Sliding Window approach (Q1)
+  [ ] PerUserRateLimiter.java             — Per-user limiting with ConcurrentHashMap (Q2)
+  [ ] BlockingTokenBucket.java            — Blocking version using Condition.await (Q8)
+  [ ] LockFreeTokenBucket.java            — Lock-free using AtomicLong + CAS (Q7)
+  [ ] TokenBucketWithTimeout.java         — tryConsume with timeout (E1)
+  [ ] TokenBucketWithMetrics.java         — With allowed/rejected counters (E2)
+
+
+================================================================================
+SECTION 5: KEY CONCEPTS TO REMEMBER
+================================================================================
+
+1. Token Bucket = bucket with max capacity, tokens added at fixed rate,
+   each request consumes tokens, no tokens = rejected.
+
+2. Lazy Refill = no background thread, calculate tokens on each call
+   using elapsed time. Simpler, no scheduling overhead.
+
+3. Thread-safety = ReentrantLock protects shared mutable state
+   (currentTokens, lastRefillTimestamp).
+
+4. Why not AtomicInteger for currentTokens?
+   Because read + check + print + decrement must happen atomically
+   as a group. AtomicInteger only protects individual operations.
+
+5. System.nanoTime() for elapsed time (not currentTimeMillis)
+   because it's not affected by clock changes (NTP, daylight saving).
+
+6. double for currentTokens because elapsed time can be fractional
+   (0.3 sec x 5 rate = 1.5 tokens).
+
+================================================================================

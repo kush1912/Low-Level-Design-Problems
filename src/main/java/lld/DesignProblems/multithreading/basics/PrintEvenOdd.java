@@ -1,4 +1,4 @@
-package lld.DesignProblems.multithreading;
+package lld.DesignProblems.multithreading.basics;
 
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;

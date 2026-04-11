@@ -1,4 +1,4 @@
-package lld.DesignProblems.multithreading;
+package lld.DesignProblems.multithreading.ratelimiter;
 
 import java.util.concurrent.locks.ReentrantLock;
 
