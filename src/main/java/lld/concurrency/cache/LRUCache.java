@@ -2,7 +2,14 @@ package lld.concurrency.cache;
 
 import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.concurrent.locks.ReentrantLock;
+/*
+    1. Would you use ConcurrentHashMap?
+        I could, but with a single global lock protecting the cache, ConcurrentHashMap doesn't provide much benefit because every get() and put() still acquires the lock to update recency. For this design, HashMap + ReentrantLock is simpler and performs similarly
+
+            ConcurrentHashMap only protects access to the hashmap. The LRU cache also maintains a doubly linked list for recency ordering. Since every get() and put() modifies the linked list, we need synchronization across both the map and the list to keep them consistent. Therefore a lock around the entire cache operation is still required.
+*/
+
 
 /**
  * =====================================================================================
@@ -33,27 +40,121 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  */
 public class LRUCache {
 
-    // TODO: Define Node class for doubly linked list
+    class Node{
+      int key;
+      int val;
+      Node prev;
+      Node next;
 
+      Node(int key, int val){
+          this.key = key;
+          this.val = val;
+      }
+    }
 
     // TODO: Define instance variables (capacity, map, head, tail, lock)
+    private final int capacity;
+    private final Map<Integer, Node> mp = new HashMap<>();;
+    private final ReentrantLock lock = new ReentrantLock();
+    private Node head, tail;
 
 
     public LRUCache(int capacity) {
-        // TODO: Initialize data structures
+        this.capacity = capacity;
     }
 
     public int get(int key) {
-        // TODO: Implement thread-safe get
-        return -1;
+        lock.lock();
+        try{
+            Node node = mp.get(key);
+            if(node == null) return -1;
+            if(node!=head){
+                removeNode(node);
+                insertAtHead(node);
+            }
+            return node.val;
+
+        }finally {
+            lock.unlock();
+        }
     }
 
-    public void put(int key, int value) {
-        // TODO: Implement thread-safe put
+    public void put(int key, int val) {
+        lock.lock();
+        try{
+            // Key already exists
+            if (mp.containsKey(key)) {
+                Node node = mp.get(key);
+
+                node.val = val;
+
+                if (node != head) {
+                    removeNode(node);
+                    insertAtHead(node);
+                }
+                return;
+            }
+
+            // Cache full, evict LRU
+            if (mp.size() == capacity) {
+                Node lru = tail;
+                removeNode(lru);
+                mp.remove(lru.key);
+            }
+            Node newNode = new Node(key, val);
+            insertAtHead(newNode);
+            mp.put(key, newNode);
+        }finally {
+            lock.unlock();
+        }
     }
 
     // TODO: Add helper methods (addToFront, removeNode, etc.)
+    private void insertAtHead(Node node) {
+        if (head == null) {
+            head = tail = node;
+            return;
+        }
 
+        node.prev = null;
+        node.next = head;
+
+        head.prev = node;
+        head = node;
+    }
+
+    private void removeNode(Node node) {
+
+        // only node
+        if (node == head && node == tail) {
+            head = tail = null;
+        }
+
+        // head node
+        else if (node == head) {
+            head = head.next;
+            if (head != null) {
+                head.prev = null;
+            }
+        }
+
+        // tail node
+        else if (node == tail) {
+            tail = tail.prev;
+            if (tail != null) {
+                tail.next = null;
+            }
+        }
+
+        // middle node
+        else {
+            node.prev.next = node.next;
+            node.next.prev = node.prev;
+        }
+
+        node.prev = null;
+        node.next = null;
+    }
 
     // ========================= TEST CASES =========================
 
