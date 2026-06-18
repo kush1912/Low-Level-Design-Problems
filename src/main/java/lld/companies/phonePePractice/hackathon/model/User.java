@@ -1,0 +1,23 @@
+package lld.companies.phonePePractice.hackathon.model;
+
+import lld.companies.phonePePractice.hackathon.utils.IdGenerator;
+import lombok.Getter;
+import lombok.Setter;
+import lombok.ToString;
+
+@Getter
+@Setter
+@ToString
+public class User {
+    public User(String name, String department) {
+        this.userId = IdGenerator.id();
+        this.name = name;
+        Department = department;
+        System.out.println("User Created! "+ name);
+    }
+    private String userId;
+    private String name;
+    private String Department;
+
+
+}

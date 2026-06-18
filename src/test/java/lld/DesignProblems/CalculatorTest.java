@@ -1,8 +1,8 @@
 package lld.DesignProblems;
 
-import lld.DesignProblems.kodu.Calculator;
-import lld.DesignProblems.kodu.Employee;
-import lld.DesignProblems.kodu.TaxConfiguration;
+import lld.companies.kodu.Calculator;
+import lld.companies.kodu.Employee;
+import lld.companies.kodu.TaxConfiguration;
 import org.junit.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
