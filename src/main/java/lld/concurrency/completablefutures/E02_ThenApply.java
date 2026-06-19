@@ -37,12 +37,14 @@ public class E02_ThenApply {
     public static CompletableFuture<UserSummary> fetchUserSummary(String userId){
         return CompletableFuture.
                 supplyAsync(()->db.getUserById(userId))
-                .thenApply(userProfile -> {
-                    String displayName = userProfile.email().split("@")[0];
-                    String badge = userProfile.tier();
-                    return new UserSummary(displayName,badge);
-                });
+                .thenApply(E02_ThenApply::toSummary);
     }
+    public static UserSummary toSummary(UserProfile userProfile){
+        String displayName = userProfile.email().split("@")[0];
+        String badge = userProfile.tier();
+        return new UserSummary(displayName,badge);
+    }
+
 
     public static void main(String[] args) throws Exception {
         System.out.println("Fetching user summaries...\n");
