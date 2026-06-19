@@ -1,0 +1,22 @@
+{
+  "users": [
+    {"userId": "U-1001", "email": "alice@company.com", "tier": "Premium", "loginCount": 150},
+    {"userId": "U-1002", "email": "bob@startup.io", "tier": "Free", "loginCount": 12},
+    {"userId": "U-1003", "email": "carol@enterprise.com", "tier": "Enterprise", "loginCount": 2340},
+    {"userId": "U-1004", "email": "dave@freelance.dev", "tier": "Premium", "loginCount": 89},
+    {"userId": "U-1005", "email": "eve@security.org", "tier": "Enterprise", "loginCount": 567}
+  ],
+  "orders": [
+    {"orderId": "ORD-001", "userId": "U-1001", "amount": 299.99, "status": "DELIVERED"},
+    {"orderId": "ORD-002", "userId": "U-1001", "amount": 149.50, "status": "SHIPPED"},
+    {"orderId": "ORD-003", "userId": "U-1002", "amount": 59.99, "status": "PENDING"},
+    {"orderId": "ORD-004", "userId": "U-1003", "amount": 1250.00, "status": "DELIVERED"},
+    {"orderId": "ORD-005", "userId": "U-1004", "amount": 89.00, "status": "PROCESSING"}
+  ],
+  "notifications": [
+    {"notifId": "N-001", "userId": "U-1001", "message": "Your order has shipped!", "read": false},
+    {"notifId": "N-002", "userId": "U-1001", "message": "Welcome to Premium!", "read": true},
+    {"notifId": "N-003", "userId": "U-1002", "message": "Complete your profile", "read": false},
+    {"notifId": "N-004", "userId": "U-1003", "message": "Invoice ready for download", "read": false}
+  ]
+}
