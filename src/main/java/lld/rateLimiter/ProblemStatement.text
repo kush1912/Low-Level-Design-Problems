@@ -1,0 +1,35 @@
+Design a thread-safe rate limiter for an API gateway. Given a request identified by a client/user ID, decide whether to allow or reject it based on a configured limit.
+
+Functional requirements
+
+• boolean allowRequest(String clientId) — returns true if the request is within limits, false if it should be throttled.
+• Support a configurable limit, e.g. N requests per T time window (say 100 req / 60 sec).
+• Support multiple algorithms, swappable at configuration time: Fixed Window, Sliding Window Log, Sliding Window Counter, Token Bucket.
+• Each client is limited independently (per-user buckets/counters).
+
+Non-functional requirements
+
+• Thread-safe — many threads call allowRequest concurrently for the same or different clients.
+• O(1)-ish per request; low memory overhead.
+• Extensible — adding a new algorithm shouldn't modify existing ones (OCP).
+-----------------------
+
+Solution:
+Your instinct — "one Rate Limiter, specific types extend it" — is on the right track, but let me refine it, because this is a spot interviewers probe:
+
+The subtle issue: A TokenBucketRateLimiter and a SlidingWindowRateLimiter don't share implementation — they only share a contract (allowRequest). If you use a concrete base class with inheritance, you get an empty/awkward base and force subclasses to fit a shape that may not match.
+
+Better: program to an interface + Strategy pattern.
+
+        <<interface>> RateLimiter
+              + allowRequest(clientId): boolean
+                     ▲   (implements, dashed)
+     ┌───────────────┼───────────────┬────────────────┐
+FixedWindow   SlidingWindowLog  SlidingWindowCounter  TokenBucket
+
+•  RateLimiter  = interface (or abstract class only if there's genuinely shared code).
+• Each algorithm = a separate implementation → this is Strategy.
+• The gateway holds a  RateLimiter  reference (injected) and calls  allowRequest()  — it doesn't care which algorithm. This satisfies DIP + OCP: new algorithm = new class, zero edits to old code.
+• Thread-safety lives inside each implementation (per-client lock or atomic state in a  ConcurrentHashMap<String, State> ).
+
+So: interface over inheritance here, and "has-a Strategy" over "is-a base class." Your version works, but naming it a Strategy and using an interface is the answer that scores points
