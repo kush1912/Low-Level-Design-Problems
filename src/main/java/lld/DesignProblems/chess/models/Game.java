@@ -40,37 +40,29 @@ public class Game {
     }
 
     public boolean move(Position from, Position to) {
-        if (status.isTerminal()
-                || !legalMoveValidator.isLegalMove(
-                        board,
-                        currentTurn,
-                        from,
-                        to
-                )) {
+
+        //Game over? or It is a legal move?
+        if (status.isTerminal() || !legalMoveValidator.isLegalMove(board, currentTurn, from, to)) {
             return false;
         }
 
+        //Get moving and Captured piece and make Move
         Piece movingPiece = board.getPiece(from);
         Piece capturedPiece = board.movePiece(from, to);
         Move move = new Move(from, to, movingPiece, capturedPiece);
 
+        //Get Current Player and its opposite color
         Player movingPlayer = getCurrentPlayer();
         Color opponentColor = currentTurn.opposite();
 
-        boolean opponentInCheck =
-                checkDetector.isKingCheck(board, opponentColor);
-        boolean opponentHasLegalMove =
-                legalMoveValidator.hasAnyLegalMove(
-                        board,
-                        opponentColor
-                );
+        // After my move, does the other King comes in check status?
+        boolean opponentInCheck = checkDetector.isKingCheck(board, opponentColor);
+
+        // Opponent has any legal move that saves the King
+        boolean opponentHasLegalMove = legalMoveValidator.hasAnyLegalMove(board, opponentColor);
 
         // Check and legal-response availability together determine the game state.
-        updateStatus(
-                movingPlayer,
-                opponentInCheck,
-                opponentHasLegalMove
-        );
+        updateStatus(movingPlayer, opponentInCheck, opponentHasLegalMove);
 
         moveHistory.add(move);
 
@@ -83,32 +75,12 @@ public class Game {
         return true;
     }
 
-    public Board getBoard() {
-        return board;
-    }
-
-    public Player getWhitePlayer() {
-        return whitePlayer;
-    }
-
-    public Player getBlackPlayer() {
-        return blackPlayer;
-    }
-
-    public Color getCurrentTurn() {
-        return currentTurn;
-    }
-
     public GameStatus getStatus() {
         return status;
     }
 
     public Optional<Player> getWinner() {
         return Optional.ofNullable(winner);
-    }
-
-    public List<Move> getMoveHistory() {
-        return List.copyOf(moveHistory);
     }
 
     private void switchTurn() {
@@ -130,6 +102,11 @@ public class Game {
             status = GameStatus.CHECKMATE;
             winner = movingPlayer;
         } else if (!opponentInCheck && !opponentHasLegalMove) {
+            // Stalemate occurs when the next player's King is not attacked,
+            // but that player has no legal move with any piece. For example,
+            // Black King on a8, White King on c6, and White Queen on b6:
+            // a8 is safe, while every available Black destination is attacked.
+            // The game ends as a draw because the King is not in check.
             status = GameStatus.STALEMATE;
             winner = null;
         } else if (opponentInCheck) {
