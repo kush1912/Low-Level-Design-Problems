@@ -1,4 +1,4 @@
-package lld.rateLimiter.model;
+package lld.DesignProblems.rateLimiter.model;
 
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
