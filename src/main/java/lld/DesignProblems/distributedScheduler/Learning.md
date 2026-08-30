@@ -211,3 +211,10 @@
     Claimed JobExecutionTrigger -> one JobExecution
     One JobExecution -> executes one Job once
     ```
+
+12. Manual execution and schedule updates
+    - `runNow(jobId)` creates an immediately due manual trigger. It has no schedule ID, is not stored as a pending scheduled trigger, and does not create another occurrence.
+    - A manual execution does not change or increment any recurring schedule associated with the same job.
+    - `updateSchedule(jobId, scheduleId, newPolicy)` updates the policy, cancels the currently pending trigger, and enqueues a replacement starting at the new policy's first execution time.
+    - A running execution is not interrupted by a schedule update because it has already been created from a claimed trigger.
+    - Trigger replacement and recurring-trigger creation synchronize on the job. Conditional repository removal prevents an already-claimed old trigger from creating a duplicate next occurrence after an update.

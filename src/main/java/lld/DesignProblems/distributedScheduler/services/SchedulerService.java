@@ -12,6 +12,7 @@ import lld.DesignProblems.distributedScheduler.repository.InMemoryExecutionRepos
 import lld.DesignProblems.distributedScheduler.repository.InMemoryJobRepository;
 import lld.DesignProblems.distributedScheduler.repository.InMemoryTriggerRepository;
 
+import java.time.Instant;
 import java.util.NoSuchElementException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.RejectedExecutionException;
@@ -75,6 +76,47 @@ public final class SchedulerService {
         return schedule.id();
     }
 
+    public String runNow(String jobId) {
+        jobRepository.findById(jobId)
+                .orElseThrow(() -> new IllegalArgumentException("Unknown job: " + jobId));
+
+        JobExecutionTrigger trigger = JobExecutionTrigger.manual(
+                IdGenerator.generate("T"),
+                jobId,
+                Instant.now(),
+                sequence.incrementAndGet()
+        );
+        triggerQueue.add(trigger);
+        return trigger.id();
+    }
+
+    public void updateSchedule(String jobId, String scheduleId, SchedulePolicy newPolicy) {
+        Job job = jobRepository.findById(jobId)
+                .orElseThrow(() -> new IllegalArgumentException("Unknown job: " + jobId));
+
+        synchronized (job) {
+            Schedule schedule = job.findSchedule(scheduleId)
+                    .orElseThrow(() -> new NoSuchElementException(
+                            "Cannot update missing schedule: " + scheduleId
+                    ));
+
+            schedule.updatePolicy(newPolicy);
+            triggerRepository.remove(scheduleId)
+                    .ifPresent(JobExecutionTrigger::cancel);
+
+            JobExecutionTrigger replacementTrigger = JobExecutionTrigger.scheduled(
+                    IdGenerator.generate("T"),
+                    jobId,
+                    scheduleId,
+                    newPolicy.firstExecutionAt(),
+                    1,
+                    sequence.incrementAndGet()
+            );
+            triggerRepository.save(scheduleId, replacementTrigger);
+            triggerQueue.add(replacementTrigger);
+        }
+    }
+
 
     // Start the Scheduler
     public void start() {
@@ -126,9 +168,6 @@ public final class SchedulerService {
             return;
         }
 
-        // process this trigger
-        trigger.scheduleId().ifPresent(scheduleId -> triggerRepository.remove(scheduleId, trigger));
-
         enqueueNextTrigger(trigger);
 
         JobExecution execution = new JobExecution(IdGenerator.generate("E"), trigger.jobId());
@@ -158,6 +197,12 @@ public final class SchedulerService {
                 .orElseThrow(() -> new NoSuchElementException("Scheduled trigger has no schedule ID: " + currentTrigger.id()));
 
         synchronized (job) {
+            // A schedule update replaces the pending trigger. In that case, this claimed
+            // trigger may execute, but it must not create another recurring trigger.
+            if (!triggerRepository.remove(scheduleId, currentTrigger)) {
+                return;
+            }
+
             Schedule schedule = job.findSchedule(scheduleId)
                     .orElseThrow(() -> new NoSuchElementException("Cannot reschedule missing schedule: " + scheduleId));
 

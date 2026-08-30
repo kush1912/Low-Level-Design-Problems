@@ -46,7 +46,10 @@ public class JobSchedulerDriverClass {
         Instant commonStartTime = Instant.now().plusSeconds(2);
 
         //Scheduler 1
-        schedulerService.createSchedule(twentySecondJob, new FixedRateSchedulePolicy(commonStartTime, Duration.ofSeconds(60), 5));
+        String twentySecondSchedule = schedulerService.createSchedule(
+                twentySecondJob,
+                new FixedRateSchedulePolicy(commonStartTime, Duration.ofSeconds(60), 5)
+        );
 
         //Scheduler 2
         schedulerService.createSchedule(thirtySecondJob, new FixedRateSchedulePolicy(commonStartTime, Duration.ofSeconds(60), 5)
@@ -60,6 +63,24 @@ public class JobSchedulerDriverClass {
         System.out.println("Scheduler started. All three jobs first run at " + commonStartTime);
 
         try {
+            // The 20-second job is complete, while the 30- and 40-second jobs are still running.
+            Thread.sleep(Duration.ofSeconds(25));
+            schedulerService.runNow(twentySecondJob);
+            System.out.println("Manual execution requested for the 20-second job");
+
+            // Replace the next pending occurrence without interrupting running executions.
+            Thread.sleep(Duration.ofSeconds(5));
+            schedulerService.updateSchedule(
+                    twentySecondJob,
+                    twentySecondSchedule,
+                    new FixedRateSchedulePolicy(
+                            Instant.now().plusSeconds(10),
+                            Duration.ofSeconds(60),
+                            3
+                    )
+            );
+            System.out.println("20-second job schedule updated to three new occurrences");
+
             // This sleep only keeps the demo process alive while scheduled jobs execute.
             Thread.sleep(Duration.ofMinutes(6));
         } finally {
