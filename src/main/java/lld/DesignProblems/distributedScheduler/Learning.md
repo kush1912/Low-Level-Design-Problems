@@ -1,220 +1,563 @@
-1. Should Job be a record?
-   - No. A job owns a changing collection of schedules, so it is not an immutable value object.
-   - The executable task and ID remain immutable, while schedules can be added or removed.
+# Distributed Scheduler Learning Notes
 
-2. How are IDs generated in the demo?
-   - One `IdGenerator` creates string IDs using a type prefix and a random six-digit number: `J-123456`, `S-234567`, `T-345678`, and `E-456789`.
-   - `IdGenerator` should not be a Singleton because it has no instance state. It is a stateless utility class with a private constructor and a static `generate()` method, so creating and managing one shared object would add no value.
-   - `ThreadLocalRandom.current()` already provides thread-safe random-number generation without requiring shared mutable state inside `IdGenerator`.
-   - A Singleton or injected generator service would become useful only if ID generation later required shared state or replaceable behavior, such as a sequence counter or a database-backed generator.
-   - This keeps the interview implementation small. A production system should use UUIDs, database-generated IDs, or another collision-resistant strategy.
+## 1. What each concrete class represents
 
-3. Why is JobTask an interface?
-   - It separates business behavior from scheduling, so the scheduler can execute email, payment, report, or other tasks through the same `execute()` contract.
-   - There is no common state requiring an abstract class. As a functional interface, it also supports lambda-based tasks.
-   - Example:
-     ```java
-     JobTask emailTask = () -> emailService.sendEmail("user@example.com");
-     JobTask paymentTask = () -> paymentService.processPayment("payment-123");
+**`JobTask`** defines the actual work through its `execute()` method.
 
-     Job emailJob = new Job(IdGenerator.generate("J"), emailTask);
-     Job paymentJob = new Job(IdGenerator.generate("J"), paymentTask);
+**`Job`** answers **what should run**. It is a reusable definition, analogous to a program, so it does not have execution status.
 
-     job.task().execute();
-     ```
+**`Schedule`** answers **when and how often a job should run**. It owns a timing policy, not runtime execution status.
 
-4. Why does JobExecution own the status instead of Job?
-   - A `Job` describes reusable work and does not execute only once. Each occurrence has its own result.
-   - A recurring job can have one completed execution, one failed execution, and another queued execution.
-     ```text
-     Job: Generate daily report
+**`OneTimeSchedulePolicy`** provides one execution time and no next occurrence.
 
-     Monday execution:    COMPLETED
-     Tuesday execution:   FAILED
-     Wednesday execution: QUEUED
-     ```
-   - `ExecutionStatus` contains `QUEUED`, `RUNNING`, `COMPLETED`, `FAILED`, and `CANCELLED`.
-   - It is stored in an `AtomicReference` because scheduler and update threads may concurrently attempt transitions such as `QUEUED -> RUNNING` and `QUEUED -> CANCELLED`.
-   - `compareAndSet()` makes the validation and update atomic. Unlike `volatile`, it prevents check-then-act race conditions.
+**`FixedRateSchedulePolicy`** provides a first time, fixed interval, and maximum execution count.
 
-5. What is Instant and why do we use it?
-   - `Instant` represents an exact point on the UTC timeline, making execution times unambiguous across machines and time zones.
-   - It is commonly used in production for scheduling, event timestamps, retries, expirations, and audit records.
-   - User-local time can be converted to an `Instant` before scheduling.
+**`JobExecutionTrigger`** represents one occurrence waiting to become due:
 
-6. What is the difference between Schedule and SchedulePolicy?
-   - `Schedule` is an identifiable entity connecting a `Job` with a timing policy.
-     ```text
-     Schedule
-      |- ScheduleId
-      |- JobId
-      `- SchedulePolicy
-     ```
-   - `SchedulePolicy` contains the algorithm for calculating execution times.
-     ```java
-     public interface SchedulePolicy {
-         Instant firstExecutionAt();
+```text
+Run this job at this time.
+```
 
-         Optional<Instant> nextExecutionAfter(
-             Instant scheduledAt,
-             int currentOccurrence
-         );
-     }
-     ```
-   - One job can have multiple schedules:
-     ```text
-     Report Job
-      |- Schedule A: every day at 6 AM
-      `- Schedule B: every day at 4 PM
-     ```
-   - Each schedule has an ID so that it can be updated or cancelled independently.
+It has `PENDING`, `CLAIMED`, and `CANCELLED` states because claiming and cancellation can race.
 
-7. Why is SchedulePolicy an interface, and why are its implementations records?
-   - Different policies calculate their next execution differently. A one-time policy has no next occurrence, while a fixed-rate policy adds an interval.
-   - The interface keeps scheduler logic independent of concrete policies and allows future strategies such as fixed-delay, daily, weekly, or cron.
-   - `OneTimeSchedulePolicy` stores one immutable execution time:
-     ```java
-     SchedulePolicy oneTime = new OneTimeSchedulePolicy(
-         Instant.parse("2026-08-30T10:00:00Z")
-     );
-     ```
-   - `FixedRateSchedulePolicy` stores an immutable first execution time, interval, and maximum execution count:
-     ```java
-     SchedulePolicy recurring = new FixedRateSchedulePolicy(
-         Instant.parse("2026-08-30T10:00:00Z"),
-         Duration.ofMinutes(5),
-         5
-     );
-     ```
-   - Each scheduled trigger carries its occurrence number. After occurrence five is claimed, the policy returns `Optional.empty()` instead of producing another trigger.
-   - Manual triggers use occurrence zero and do not affect a recurring schedule's execution count.
-   - Records are appropriate because policy configurations are immutable values. They provide final fields, constructors, accessors, value equality, `hashCode()`, and `toString()`.
-   - An immutable final class would also be correct and may be preferred for framework compatibility or custom construction.
-   - Updating a schedule replaces its complete policy:
-     ```java
-     schedule.updatePolicy(
-         new FixedRateSchedulePolicy(
-             newFirstExecution,
-             Duration.ofMinutes(10),
-             5
-         )
-     );
-     ```
-   - `OneTimeSchedulePolicy` explicitly implements `firstExecutionAt()` because its generated record accessor is named `executeAt()`.
-   - `FixedRateSchedulePolicy` could rely on its generated `firstExecutionAt()` accessor, but it is implemented explicitly for clarity.
-   - A one-time policy returns `Optional.empty()` from `nextExecutionAfter()` because the absence of another occurrence is a valid outcome, not an error.
+**`JobExecution`** is the actual runtime attempt, analogous to a process. It has:
 
-8. What is Delayed and why does JobExecutionTrigger implement it?
-   - `Delayed` is an interface from `java.util.concurrent` representing an object that becomes available only after its delay expires.
-     ```java
-     public interface Delayed extends Comparable<Delayed> {
-         long getDelay(TimeUnit unit);
-     }
-     ```
-   - `getDelay()` returns how much time remains. A zero or negative value means the trigger is due.
-     ```java
-     @Override
-     public long getDelay(TimeUnit unit) {
-         long remainingMillis =
-             triggerAt.toEpochMilli() - System.currentTimeMillis();
+```text
+QUEUED -> RUNNING -> COMPLETED
+                  -> FAILED
+QUEUED -> CANCELLED
+```
 
-         return unit.convert(
-             remainingMillis,
-             TimeUnit.MILLISECONDS
-         );
-     }
-     ```
-   - `Delayed` extends `Comparable` because the queue must keep the earliest trigger at the front. Sequence provides stable ordering when times are equal.
-     ```java
-     @Override
-     public int compareTo(Delayed other) {
-         JobExecutionTrigger trigger = (JobExecutionTrigger) other;
+**`JobService`** creates jobs. **`SchedulerService`** manages schedules and triggers. **`JobWorker`** performs the actual execution.
 
-         int result = triggerAt.compareTo(trigger.triggerAt());
-         return result != 0
-             ? result
-             : Long.compare(sequence, trigger.sequence());
-     }
-     ```
-   - `Delayed` does not execute a task, create a thread, or sleep. It only exposes timing and ordering information.
+**Repositories** store jobs, pending triggers, and executions. **`JobExecutionTriggerQueue`** wraps the `DelayQueue`.
 
-9. What is the difference between Delayed and DelayQueue?
-   - `Delayed` is implemented by one item and describes when that item becomes available.
-   - `DelayQueue` is the thread-safe container that stores multiple delayed items, keeps the earliest one at the front, and blocks until it is due.
-     ```java
-     JobExecutionTrigger trigger = createTrigger();
+Remember:
 
-     DelayQueue<JobExecutionTrigger> queue = new DelayQueue<>();
-     queue.put(trigger);
+```text
+Job       = reusable work definition
+Schedule  = when and how often
+Trigger   = one occurrence waiting for its time
+Execution = actual runtime attempt
+```
 
-     // Blocks until trigger.getDelay(...) is zero or negative.
-     JobExecutionTrigger dueTrigger = queue.take();
-     ```
-   - In this scheduler, `JobExecutionTrigger` implements `Delayed`, while `JobExecutionTriggerQueue` owns the `DelayQueue`.
-   - Once claimed, a trigger creates a separate `JobExecution`. The execution itself has no scheduling information.
+## 2. Core idea
 
-10. How is DelayQueue related to PriorityQueue?
-    - `DelayQueue` can be understood as a thread-safe priority queue specialized for delayed elements.
-    - It is not a subclass of `PriorityQueue`, but it uses priority-based ordering internally.
+An in-memory scheduler is a time-aware producer-consumer system:
 
-    | Structure | Ordered | Thread-safe | Waits until due |
-    |---|---:|---:|---:|
-    | `PriorityQueue` | Yes | No | No |
-    | `PriorityBlockingQueue` | Yes | Yes | No |
-    | `DelayQueue` | Yes | Yes | Yes |
+```text
+createSchedule()/runNow()
+        |
+        v
+JobExecutionTrigger
+        |
+        v
+DelayQueue
+        |
+        v
+scheduler consumer thread
+        |
+        v
+JobExecution
+        |
+        v
+ExecutorService worker pool
+        |
+        v
+JobTask.execute()
+```
 
-    ```text
-    Current time: 10:00
-    Job A: 10:10
-    Job B: 10:02
-    Job C: 10:05
+- Schedule APIs produce triggers.
+- `DelayQueue.take()` returns a trigger only when it is due.
+- The scheduler claims the trigger and creates an execution.
+- A worker thread runs the actual business task.
+- The scheduler thread never executes long-running business logic.
 
-    Queue order: Job B -> Job C -> Job A
+## 3. Current domain model
 
-    PriorityQueue.poll()          -> returns Job B immediately
-    PriorityBlockingQueue.take() -> returns Job B immediately
-    DelayQueue.take()            -> waits until 10:02
-    ```
+```text
+Job
+ |- String id
+ |- JobTask task
+ `- Map<String, Schedule>
 
-    - `PriorityBlockingQueue.take()` blocks only when the queue is empty.
-    - `DelayQueue.take()` also blocks when its earliest element exists but is not due.
+Schedule
+ |- String id
+ |- String jobId
+ `- volatile SchedulePolicy
 
-11. Final mental model
-    ```text
-    Job
-     |- JobId
-     |- JobTask
-     `- Multiple Schedules
+JobExecutionTrigger
+ |- String id
+ |- String jobId
+ |- Optional<String> scheduleId
+ |- TriggerType
+ |- Instant triggerAt
+ |- int occurrence
+ |- long sequence
+ `- AtomicReference<TriggerStatus>
 
-    Schedule
-     |- ScheduleId
-     |- JobId
-     `- SchedulePolicy
+JobExecution
+ |- String id
+ |- String jobId
+ `- AtomicReference<ExecutionStatus>
+```
 
-    JobExecutionTrigger
-     |- TriggerId
-     |- JobId
-     |- Optional ScheduleId
-     |- TriggerType
-     |- triggerAt
-     `- TriggerStatus
+Relationships:
 
-    JobExecution
-     |- ExecutionId
-     |- JobId
-     `- ExecutionStatus
-    ```
+```text
+One Job -> many Schedules
+One Schedule -> one pending trigger
+Schedule or manual request -> Trigger
+Claimed Trigger -> JobExecution
+JobExecution -> executes JobTask once
+```
 
-    ```text
-    One Job -> many Schedules
-    Schedule or manual request -> JobExecutionTrigger
-    Claimed JobExecutionTrigger -> one JobExecution
-    One JobExecution -> executes one Job once
-    ```
+## 4. JobTask and JobService
 
-12. Manual execution and schedule updates
-    - `runNow(jobId)` creates an immediately due manual trigger. It has no schedule ID, is not stored as a pending scheduled trigger, and does not create another occurrence.
-    - A manual execution does not change or increment any recurring schedule associated with the same job.
-    - `updateSchedule(jobId, scheduleId, newPolicy)` updates the policy, cancels the currently pending trigger, and enqueues a replacement starting at the new policy's first execution time.
-    - A running execution is not interrupted by a schedule update because it has already been created from a claimed trigger.
-    - Trigger replacement and recurring-trigger creation synchronize on the job. Conditional repository removal prevents an already-claimed old trigger from creating a duplicate next occurrence after an update.
+`JobTask` is a functional interface:
+
+```java
+@FunctionalInterface
+public interface JobTask {
+    void execute() throws Exception;
+}
+```
+
+A lambda can define the work:
+
+```java
+String jobId = jobService.createJob(
+        () -> emailService.sendEmail()
+);
+```
+
+`createJob()` only stores the task:
+
+```java
+public String createJob(JobTask task) {
+    Job job = new Job(IdGenerator.generate("J"), task);
+    jobRepository.save(job);
+    return job.id();
+}
+```
+
+The task runs later when `JobWorker` calls:
+
+```java
+job.task().execute();
+```
+
+`createTimedJob()` is only a driver convenience for creating tasks that sleep for a configured duration.
+
+## 5. Schedule and SchedulePolicy
+
+`Schedule` connects a job to a timing policy:
+
+```java
+public interface SchedulePolicy {
+    Instant firstExecutionAt();
+
+    Optional<Instant> nextExecutionAfter(
+            Instant scheduledAt,
+            int currentOccurrence
+    );
+}
+```
+
+Current policies:
+
+```java
+new OneTimeSchedulePolicy(executeAt);
+
+new FixedRateSchedulePolicy(
+        firstExecutionAt,
+        Duration.ofSeconds(60),
+        5
+);
+```
+
+One-time policy:
+
+```text
+firstExecutionAt()      -> configured time
+nextExecutionAfter()    -> Optional.empty()
+```
+
+Fixed-rate policy:
+
+```text
+next time = current scheduled time + interval
+```
+
+It is based on scheduled time rather than completion time. The policy returns `Optional.empty()` after `maxExecutions` is reached.
+
+Policies are immutable records and do not need status. `Schedule.policy` is `volatile` because an update replaces the policy reference.
+
+## 6. Recurring execution
+
+Every scheduled trigger contains an occurrence number:
+
+```text
+Occurrence 1 -> enqueue occurrence 2
+Occurrence 2 -> enqueue occurrence 3
+Occurrence 3 -> enqueue occurrence 4
+Occurrence 4 -> enqueue occurrence 5
+Occurrence 5 -> stop
+```
+
+The policy determines whether another occurrence exists:
+
+```java
+schedule.policy()
+        .nextExecutionAfter(
+                currentTrigger.triggerAt(),
+                currentTrigger.occurrence()
+        )
+        .ifPresent(nextExecutionAt -> {
+            // Create and enqueue the next trigger.
+        });
+```
+
+An empty result is valid for one-time schedules and completed recurring schedules.
+
+## 7. Manual execution
+
+`runNow(jobId)`:
+
+1. Verifies that the job exists.
+2. Creates a manual trigger due at `Instant.now()`.
+3. Adds it directly to the trigger queue.
+
+A manual trigger:
+
+- Has no schedule ID.
+- Uses occurrence zero.
+- Is not stored as a pending scheduled trigger.
+- Does not change existing schedules.
+- Does not produce another occurrence.
+
+A manual and scheduled execution of the same `JobTask` may run concurrently, so the task must be thread-safe unless overlap prevention is added.
+
+## 8. Trigger and DelayQueue
+
+`JobExecutionTrigger` implements `Delayed`:
+
+```java
+@Override
+public long getDelay(TimeUnit unit) {
+    long remainingMillis =
+            triggerAt.toEpochMilli() - System.currentTimeMillis();
+    return unit.convert(remainingMillis, TimeUnit.MILLISECONDS);
+}
+```
+
+`DelayQueue` is:
+
+- Thread-safe.
+- Ordered by trigger time.
+- Blocking when empty.
+- Blocking when the earliest trigger is not due.
+
+`sequence` breaks ties when triggers have the same execution time.
+
+```text
+PriorityQueue         -> ordered, not thread-safe, no time waiting
+PriorityBlockingQueue -> ordered, thread-safe, no time waiting
+DelayQueue            -> ordered, thread-safe, waits until due
+```
+
+## 9. Creating a schedule: producer flow
+
+`createSchedule()`:
+
+1. Loads the job.
+2. Creates a `Schedule`.
+3. Creates occurrence one as a trigger.
+4. Stores the schedule in the job.
+5. Stores the trigger as the pending trigger.
+6. Adds the trigger to the `DelayQueue`.
+
+```text
+createSchedule()
+    -> create Schedule
+    -> create first Trigger
+    -> triggerRepository.save()
+    -> triggerQueue.add()
+```
+
+This is the producer side of the first queue.
+
+## 10. Starting and stopping the consumer
+
+```java
+private final AtomicBoolean running = new AtomicBoolean();
+private volatile Thread schedulerThread;
+```
+
+`running.compareAndSet(false, true)` prevents multiple scheduler consumers from being started.
+
+```java
+private void consumeTriggers() {
+    while (running.get()) {
+        JobExecutionTrigger trigger = triggerQueue.take();
+        processTrigger(trigger);
+    }
+}
+```
+
+`schedulerThread` is `volatile` so the shutdown caller sees the latest thread reference.
+
+Shutdown performs:
+
+```text
+running = false              -> asks the loop to stop
+schedulerThread.interrupt()  -> wakes it from DelayQueue.take()
+```
+
+The driver decides when to start and stop. `SchedulerService` owns how its internal thread is managed.
+
+## 11. Processing a due trigger
+
+`processTrigger()`:
+
+```text
+claim trigger
+    -> enqueue next occurrence if required
+    -> create JobExecution
+    -> save execution
+    -> submit to worker pool
+```
+
+Claiming is atomic:
+
+```text
+PENDING -> CLAIMED
+PENDING -> CANCELLED
+```
+
+Only one transition can win. Cancelled or previously claimed triggers are ignored.
+
+The execution is submitted without blocking the scheduler:
+
+```java
+workerPool.submit(() -> jobWorker.execute(execution));
+```
+
+The scheduler immediately returns to waiting for the next trigger.
+
+## 12. Updating a schedule
+
+`updateSchedule(jobId, scheduleId, newPolicy)`:
+
+1. Loads the job and schedule.
+2. Synchronizes on the job.
+3. Replaces the schedule policy.
+4. Removes and cancels the pending trigger.
+5. Creates occurrence one from the new policy.
+6. Stores and enqueues the replacement trigger.
+
+A running execution is not interrupted because it was already created from a claimed trigger.
+
+Conditional removal prevents duplicate recurrence:
+
+```java
+if (!triggerRepository.remove(scheduleId, currentTrigger)) {
+    return;
+}
+```
+
+If an update has already replaced the pending trigger, the old claimed trigger may execute but cannot create another next occurrence.
+
+## 13. Optional usage
+
+Use `Optional` based on whether absence is valid:
+
+- Required value: `orElseThrow()`.
+- Valid absence: `ifPresent()`, `map()`, or `Optional.empty()`.
+- Avoid `orElse(null)`.
+
+Required job:
+
+```java
+Job job = jobRepository.findById(jobId)
+        .orElseThrow(() ->
+                new IllegalArgumentException("Unknown job: " + jobId));
+```
+
+Valid optional schedule ID:
+
+```java
+trigger.scheduleId().ifPresent(scheduleId ->
+        triggerRepository.remove(scheduleId, trigger)
+);
+```
+
+A manual trigger legitimately has no schedule ID.
+
+## 14. Current driver scenario
+
+The driver creates:
+
+```text
+20-second job -> every 60 seconds
+30-second job -> every 60 seconds
+40-second job -> one time
+```
+
+All initially have the same trigger time and execute through a three-thread worker pool.
+
+During execution:
+
+1. The driver waits 25 seconds.
+2. It manually triggers the 20-second job while other jobs are running.
+3. It waits another five seconds.
+4. It replaces the 20-second job's pending schedule with three new occurrences.
+
+The driver uses `Thread.sleep()` only to keep the demo process alive. It is not scheduler logic.
+
+## 15. Interview scope
+
+The minimum implementation for a 45-60 minute interview is:
+
+```text
+JobTask
+Job
+SchedulePolicy
+Delayed trigger
+DelayQueue
+One scheduler consumer
+ExecutorService worker pool
+One-time and basic recurring scheduling
+```
+
+Manual execution, schedule updates, cancellation races, execution storage, and graceful shutdown are follow-ups.
+
+For a distributed production system, discuss:
+
+- Durable database storage.
+- Atomic claiming by multiple scheduler nodes.
+- Leases and heartbeats.
+- At-least-once execution.
+- Idempotent jobs.
+- Retries and exponential backoff.
+- Misfire handling.
+- Metrics and dead-letter handling.
+
+## 16. Deep flow: Producer -> DelayQueue -> Consumer -> Worker Pool
+
+### Step 1: Create the job
+
+```java
+String jobId = jobService.createJob(() -> sendEmail());
+```
+
+The task is stored inside `Job`; it does not execute yet.
+
+### Step 2: Produce the first trigger
+
+```java
+schedulerService.createSchedule(
+        jobId,
+        new FixedRateSchedulePolicy(firstTime, interval, 5)
+);
+```
+
+The service creates a schedule and its first trigger:
+
+```text
+Scheduler API = producer
+DelayQueue     = buffer
+```
+
+### Step 3: Wait for time
+
+The scheduler consumer blocks:
+
+```java
+JobExecutionTrigger trigger = triggerQueue.take();
+```
+
+The trigger may already be inside the queue, but `take()` cannot return it before `triggerAt`.
+
+### Step 4: Consume and claim
+
+When the trigger becomes due:
+
+```java
+if (!trigger.claim()) {
+    return;
+}
+```
+
+This prevents cancelled or duplicate processing.
+
+### Step 5: Produce the next recurrence
+
+For a recurring schedule, the consumer also becomes a producer:
+
+```text
+consume occurrence 1
+    -> enqueue occurrence 2
+```
+
+For one-time, manual, or final occurrences, no next trigger is produced.
+
+### Step 6: Create an execution
+
+```java
+JobExecution execution =
+        new JobExecution(IdGenerator.generate("E"), trigger.jobId());
+```
+
+The trigger represents the scheduling request. The execution represents the runtime attempt.
+
+### Step 7: Dispatch to workers
+
+```java
+workerPool.submit(() -> jobWorker.execute(execution));
+```
+
+This creates a second producer-consumer stage:
+
+```text
+Scheduler thread        = producer of worker tasks
+Executor internal queue = buffer
+Worker threads          = consumers
+```
+
+### Step 8: Execute the task
+
+`JobWorker`:
+
+```text
+load Job
+    -> mark execution RUNNING
+    -> call JobTask.execute()
+    -> mark COMPLETED or FAILED
+```
+
+The complete thread flow is:
+
+```text
+Main/client thread
+    -> produces Trigger
+
+DelayQueue
+    -> waits until due
+
+Scheduler thread
+    -> claims Trigger
+    -> creates next Trigger
+    -> creates JobExecution
+    -> submits worker task
+
+ExecutorService
+    -> queues worker task
+
+Worker thread
+    -> JobWorker.execute()
+    -> JobTask.execute()
+    -> COMPLETED or FAILED
+```
+
+The scheduler must not execute business logic itself. If it ran a 40-second task, it could not consume other due triggers during those 40 seconds.
