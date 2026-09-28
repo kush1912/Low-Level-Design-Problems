@@ -8,6 +8,13 @@ group = 'lld'
 version = '0.0.1-SNAPSHOT'
 sourceCompatibility = JavaVersion.VERSION_21
 
+springBoot {
+	// Multiple design-problem exercises define their own main()/@SpringBootApplication
+	// classes; pin bootRun/bootJar to the Inventory Management System demo so
+	// `./gradlew bootRun` is unambiguous.
+	mainClass = 'lld.DesignProblems.inventoryManagementSystem.InventoryManagementApplication'
+}
+
 
 configurations {
 	compileOnly {
@@ -39,7 +46,6 @@ dependencies {
 tasks.named('test') {
 	useJUnitPlatform()
 }
-
 
 
 
